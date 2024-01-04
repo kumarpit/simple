@@ -69,47 +69,167 @@
 (define Tenv? (envof? Type?))
 
 (define-type Simple/wt
-  ;; [var/wt]
-  ;; ----------------------
-  ;;    tenv ⊢ v : type
-  ;; CHECK: (lookup-env tenv v) = type
   [var/wt (tenv Tenv?) (v identifier?)]
-
-  ;; [bool/wt]
-  ;; ----------------------
-  ;;   tenv ⊢ b : boolean
   [bool/wt (tenv Tenv?) (b boolean?)]
-
-  ;; [sif/wt]  tenv1 ⊢ p : type1
-  ;;           tenv2 ⊢ c : type2  tenv3 ⊢ a : type3
-  ;; ------------------------------------------------------------
-  ;;          tenv1 ⊢ {if p c a} : type2
-  ;; CHECK: tenv1 = tenv2 = tenv3
-  ;; CHECK: type1 = boolean
-  ;; CHECK: type2 = type3
   [sif/wt (p Simple/wt?) (c Simple/wt?) (a Simple/wt?)]
-
-  ;; [fun/wt]  tenv2 ⊢ body : type1  
-  ;; ------------------------------------------------------------
-  ;;           tenv1 ⊢ {λ {x : type0} body} : type2
-  ;; CHECK: tenv2 = (extend-env tenv1
-  ;;                            (list x)
-  ;;                            (list type0))
-  ;; CHECK: type2 = type0 -> type1
-  [fun/wt (i identifier?) (body Simple/wt?)]
-
-  ;; [app/wt]  tenv1 ⊢ rator : type1   tenv2 ⊢ rand : type2
-  ;; ------------------------------------------------------------
-  ;;           tenv1 ⊢ {rator rand} : type3
-  ;; CHECK: tenv1 = tenv2
-  ;; CHECK: type1 = type2 -> type3
+  [fun/wt (argType Type?) (i identifier?) (body Simple/wt?)]
   [app/wt (rator Simple/wt?) (rand Simple/wt?)])
 
-;; TODO
-;; 1) Define selector functions
-;; 2) Check derivation tree
-;; 3) Add type-checking to the interpreter
+#;
+(define (fn-for-simple/wt simple/wt)
+  (type-case Simple/wt simple/wt
+    [var/wt (tenv v) (... tenv v)]
+    [bool/wt (tenv b) (... tenv b)]
+    [sif/wt (p c a) (... (fn-for-simple/wt p)
+                         (fn-for-simple/wt c)
+                         (fn-for-simple/wt a))]
+    [fun/wt (argType i body) (... i
+                                  (fn-for-simple/wt body))]
+    [app/wt (rator rand) (... (fn-for-simple/wt rator)
+                              (fn-for-simple/wt rand))]))
 
+
+;; Selectors
+
+;; Simple/wt -> Tenv
+;; produce the type environment associated with the given derivation
+(define (simple/wt-tenv simple/wt)
+  (type-case Simple/wt simple/wt
+    [var/wt (tenv v) tenv]
+    [bool/wt (tenv b) tenv]
+    [sif/wt (p c a) (simple/wt-tenv p)]
+    [fun/wt (argType i body) (shrink-env (simple/wt-tenv body)
+                                         (list i))]
+    [app/wt (rator rand) (simple/wt-tenv rator)]))
+
+
+;; Simple/wt -> Simple
+;; produce the Simple expression associated with the given Simple/wt
+(define (simple/wt-simple simple/wt)
+  (type-case Simple/wt simple/wt
+    [var/wt (tenv v) (var v)]
+    [bool/wt (tenv b) (bool b)]
+    [sif/wt (p c a) (sif (simple/wt-simple p)
+                         (simple/wt-simple c)
+                         (simple/wt-simple a))]
+    [fun/wt (argType i body) (fun i
+                                  (simple/wt-simple body))]
+    [app/wt (rator rand) (app (simple/wt-simple rator)
+                              (simple/wt-simple rand))]))
+
+;; Simple/wt -> Type
+;; produce the type associated with the given expression
+(define (simple/wt-type simple/wt)
+  (type-case Simple/wt simple/wt
+    [var/wt (tenv v) (lookup-env tenv v)]
+    [bool/wt (tenv b) (boolType)]
+    [sif/wt (p c a) (simple/wt-type c)]
+    [fun/wt (argType i body) (funType argType
+                                      (simple/wt-type body))]
+    [app/wt (rator rand) (funType-range (simple/wt-type rator))]))
+
+
+;; Type -> string
+;; produce a string corresponding to a given type
+(define (type-string type)
+  (type-case Type type
+    [boolType () "(boolean)"]
+    [funType (domain range) (string-append "("
+                                           (type-string domain)
+                                           "->"
+                                           (type-string range)
+                                           ")")]))
+
+;; Simple/wt -> void
+;; given a well-formed Simple/wt, produce void
+;; Effect: signal an error if the given Simple/wt derivation is ill-formed.
+(define (check-simple/wt simple/wt)
+  (local [;; Tenv Tenv -> void
+          (define (check-simple/wt-tenvs simple/wt1 simple/wt2)
+            (unless (equal? (simple/wt-tenv simple/wt1)
+                            (simple/wt-tenv simple/wt2))
+              (error 'check "mismatched envs, ~a ≠ ~a"
+                     (simple/wt-tenv simple/wt1)
+                     (simple/wt-tenv simple/wt2))))
+
+          ;; Simple/wt Type -> void
+          (define (check-simple/wt-type simple/wt type)
+            (begin
+              (check-simple/wt simple/wt)
+              (unless (equal? (simple/wt-type simple/wt) type)
+                (error 'check "~a has type ~a: expected ~a"
+                       (simple/wt-simple simple/wt)
+                       (type-string (simple/wt-type simple/wt))
+                       (type-string type)))))
+
+          ;; Type -> funType
+          (define (to-funType type)
+            (match type
+              [(funType param-type result-type) type]
+              [else (error 'check-simple/wt "Unexpected non-function type ~a"
+                           (type-string type))]))
+
+          ;; Tenv identifier Type -> void
+          (define (check-env-binding tenv x expected-type)
+            (let ([env-type (lookup-env tenv x)])
+              (unless (equal? env-type expected-type)
+                (error 'check-simple/wt
+                       "unexpected type binding for ~a:\nexpected ~a\ngot ~a"
+                       env-type
+                       expected-type))))]
+    (type-case Simple/wt simple/wt
+      
+      ;; [var/wt]
+      ;; ----------------------
+      ;;    tenv ⊢ v : type
+      ;; CHECK: (lookup-env tenv v) = type
+      [var/wt (tenv v)
+              (cond
+                [(assoc v tenv) (void)]
+                [else
+                 (error 'check-simple/wt "var ~a not bound in tenv ~a" v tenv)])]
+
+      ;; [bool/wt]
+      ;; ----------------------
+      ;;   tenv ⊢ b : boolean
+      [bool/wt (tenv b) (void)]
+
+      ;; [sif/wt]  tenv1 ⊢ p : type1
+      ;;           tenv2 ⊢ c : type2  tenv3 ⊢ a : type3
+      ;; ------------------------------------------------------------
+      ;;          tenv1 ⊢ {if p c a} : type2
+      ;; CHECK: tenv1 = tenv2 = tenv3
+      ;; CHECK: type1 = boolean
+      ;; CHECK: type2 = type3
+      [sif/wt (p c a)
+              (begin
+                (check-simple/wt-type p (boolType))
+                (check-simple/wt-type c (simple/wt-type a))
+                (check-simple/wt-tenvs p c)
+                (check-simple/wt-tenvs c a)
+                (check-simple/wt-tenvs p a))]
+
+      ;; [fun/wt]  tenv2 ⊢ body : type1  
+      ;; ------------------------------------------------------------
+      ;;           tenv1 ⊢ {λ {x : type0} body} : type2
+      ;; CHECK: tenv2 = (extend-env tenv1
+      ;;                            (list x)
+      ;;                            (list type0))
+      ;; CHECK: type2 = type0 -> type1
+      [fun/wt (argType i body)
+              (check-env-binding (simple/wt-tenv body) i argType)]
+      
+      ;; [app/wt]  tenv1 ⊢ rator : type1   tenv2 ⊢ rand : type2
+      ;; ------------------------------------------------------------
+      ;;           tenv1 ⊢ {rator rand} : type3
+      ;; CHECK: tenv1 = tenv2
+      ;; CHECK: type1 = type2 -> type3
+      [app/wt (rator rand)
+              (begin
+                (check-simple/wt-tenvs (simple/wt-tenv rator) (simple/wt-tenv rand))
+                (to-funType (simple/wt-type rator))
+                (check-simple/wt-type (funType-domain (simple/wt-type rator))
+                                      (simple/wt-type rand)))])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Interpretation
