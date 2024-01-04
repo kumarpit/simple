@@ -39,7 +39,7 @@
     [`true (bool #t)]
     [`false (bool #f)]
     [`,i #:when (identifier? i) (var i)]
-    [`{ if ,p ,c ,a } (_if (parse/simple p)
+    [`{ if ,p ,c ,a } (sif (parse/simple p)
                            (parse/simple c)
                            (parse/simple a))]
     [`{ λ {,i} ,sfs } (fun i
@@ -62,11 +62,11 @@
 (test (parse/simple `{ if true
                           {λ {x} x}
                           {λ {F} {λ {x} (F x)}}})
-      (_if (bool #t) (fun 'x (var 'x)) (fun 'F (fun 'x (app (var 'F) (var 'x))))))
+      (sif (bool #t) (fun 'x (var 'x)) (fun 'F (fun 'x (app (var 'F) (var 'x))))))
 (test (parse/simple `{ if ((λ {x} x) true)
                           true
                           false})
-      (_if (app (fun 'x (var 'x)) (bool #t)) (bool #t) (bool #f)))
+      (sif (app (fun 'x (var 'x)) (bool #t)) (bool #t) (bool #f)))
 
 ;; the following example is expected to diverge
 #;

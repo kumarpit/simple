@@ -11,11 +11,9 @@
 ;; INVARIANT: cannot be equal to any Simple keyword
 ;; interp. variable name in Simple
 (define (identifier? s)
-  (and (symbol? s)
-       (not (equal? s "λ"))
-       (not (equal? s "true"))
-       (not (equal? s "false"))
-       (not (equal? s "if"))))
+  (local [(define RESERVED '(λ true false if :))]
+    (and (symbol? s)
+         (not (memq s RESERVED)))))
 
 (define ID1 'F)
 (define ID2 'x)
@@ -25,7 +23,7 @@
 (define-type Simple
   [var (v identifier?)]
   [bool (b boolean?)]
-  [_if (pred Simple?) (conseq Simple?) (altern Simple?)]  ;; if is a Racket keyword
+  [sif (pred Simple?) (conseq Simple?) (altern Simple?)]  ;; if is a Racket keyword
   [fun (i identifier?) (body Simple?)]
   [app (ratr Simple?) (rand Simple?)])
 
@@ -61,7 +59,57 @@
 ;; Typing
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; TODO!!!
+(define-type Type
+  [boolType]
+  [funType (domain Type?) (range Type?)])
+;; <Type> ::= boolean | <Type> -> <Type>
+
+;; Tenv is (envof Type)
+;; interp. The type associated to each identifier in the surrounding context
+(define Tenv? (envof? Type?))
+
+(define-type Simple/wt
+  ;; [var/wt]
+  ;; ----------------------
+  ;;    tenv ⊢ v : type
+  ;; CHECK: (lookup-env tenv v) = type
+  [var/wt (tenv Tenv?) (v identifier?)]
+
+  ;; [bool/wt]
+  ;; ----------------------
+  ;;   tenv ⊢ b : boolean
+  [bool/wt (tenv Tenv?) (b boolean?)]
+
+  ;; [sif/wt]  tenv1 ⊢ p : type1
+  ;;           tenv2 ⊢ c : type2  tenv3 ⊢ a : type3
+  ;; ------------------------------------------------------------
+  ;;          tenv1 ⊢ {if p c a} : type2
+  ;; CHECK: tenv1 = tenv2 = tenv3
+  ;; CHECK: type1 = boolean
+  ;; CHECK: type2 = type3
+  [sif/wt (p Simple/wt?) (c Simple/wt?) (a Simple/wt?)]
+
+  ;; [fun/wt]  tenv2 ⊢ body : type1  
+  ;; ------------------------------------------------------------
+  ;;           tenv1 ⊢ {λ {x : type0} body} : type2
+  ;; CHECK: tenv2 = (extend-env tenv1
+  ;;                            (list x)
+  ;;                            (list type0))
+  ;; CHECK: type2 = type0 -> type1
+  [fun/wt (i identifier?) (body Simple/wt?)]
+
+  ;; [app/wt]  tenv1 ⊢ rator : type1   tenv2 ⊢ rand : type2
+  ;; ------------------------------------------------------------
+  ;;           tenv1 ⊢ {rator rand} : type3
+  ;; CHECK: tenv1 = tenv2
+  ;; CHECK: type1 = type2 -> type3
+  [app/wt (rator Simple/wt?) (rand Simple/wt?)])
+
+;; TODO
+;; 1) Define selector functions
+;; 2) Check derivation tree
+;; 3) Add type-checking to the interpreter
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Interpretation
@@ -70,7 +118,7 @@
 (define-type Value
   [boolV (b boolean?)]
   [funV (param symbol?) (body Simple?)])
-;; interp. Simple runtime value
+;; interp. Simple runtime values
 
 ;; We restrict Simple to **closed** expressions so we don't need to
 ;; worry about variable capture
@@ -86,7 +134,7 @@
             (type-case Simple s
               [var (v) (if (member v bounds) #t #f)]
               [bool (b) #t]
-              [_if (p c a) (and (closed-simple?--bounds p bounds)
+              [sif (p c a) (and (closed-simple?--bounds p bounds)
                                 (closed-simple?--bounds c bounds)
                                 (closed-simple?--bounds a bounds))]
               [fun (i body) (closed-simple?--bounds body (cons i bounds))]
@@ -105,7 +153,7 @@
             (type-case Simple s
               [var (v) (lookup-env env v)]
               [bool (b) (boolV b)]
-              [_if (p c a) (let ([pv (interp/simple p)])
+              [sif (p c a) (let ([pv (interp/simple p)])
                              (type-case Value pv
                                [funV (p body) (error 'interp/simple)]
                                [boolV (b) (if b
@@ -120,8 +168,8 @@
                                           (interp/simple-env (funV-body ratorv)
                                                              (extend-env
                                                               env
-                                                              (funV-param ratorv)
-                                                              randv))]))]))]
+                                                              (list (funV-param ratorv))
+                                                              (list randv)))]))]))]
     (begin
       (unless (closed-simple? s)
         (error 'interp/simple "not a valid Simple expression: ~a" s))
@@ -132,10 +180,10 @@
       (funV 'x (var 'x)))
 (test (interp/simple (bool #t)) (boolV #t))
 (test (interp/simple (bool #f)) (boolV #f))
-(test (interp/simple (_if (bool #t)
+(test (interp/simple (sif (bool #t)
                           (fun 'x (var 'x))
                           (fun 'F (fun 'x (app (var 'F) (var 'x))))))
       (funV 'x (var 'x)))
-(test (interp/simple (_if (app (fun 'x (var 'x)) (bool #t)) (bool #t) (bool #f)))
+(test (interp/simple (sif (app (fun 'x (var 'x)) (bool #t)) (bool #t) (bool #f)))
       (boolV #t))
 (test/exn (interp/simple (app (bool #t) (bool #f))) "")
