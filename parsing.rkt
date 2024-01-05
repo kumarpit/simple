@@ -31,6 +31,15 @@
                              (fn-for-sfs sexp2))]
     [otherwise (...)]))
 
+
+;; TFS -> Type
+(define (parse/type type)
+  (match type
+    [`bool (boolType)]
+    [`{,X -> ,Y} (funType (parse/type X) (parse/type Y))]
+    [otherwise (error 'parse/simple "invalid type")]))
+
+
 ;; SFS -> Simple
 ;; produce Simple corresponding to the given SFS expression
 ;; EFFECT: signals an error if no representation possible
@@ -42,16 +51,22 @@
     [`{ if ,p ,c ,a } (sif (parse/simple p)
                            (parse/simple c)
                            (parse/simple a))]
-    [`{ λ {,i} ,sfs } (fun i
-                           (parse/simple sfs))]
+    [`{ λ {,i : ,argType} ,sfs } (fun (parse/type argType)
+                                      i
+                                      (parse/simple sfs))]
+    ;; todo: add any type!!!
+    #; 
+    [`{ λ {,i : ,argType} ,sfs } (fun (parse/type argType)
+                                      i
+                                      (parse/simple sfs))]
     [`{ ,sexp1 ,sexp2 } (app (parse/simple sexp1)
                              (parse/simple sexp2))]
     [otherwise (error 'parse/simple "bad simple: ~a" sexp)]))
 
-(test (parse/simple `{λ {x} x})
-      (fun 'x (var 'x)))
-(test (parse/simple `{λ {F} {λ {x} (F x)}})
-      (fun 'F (fun 'x (app (var 'F) (var 'x)))))
+(test (parse/simple `{λ {x : bool} x})
+      (fun (boolType) 'x (var 'x)))
+(test (parse/simple `{λ {F : {bool -> bool}} {λ {x} (F x)}})
+      (fun (funType (boolType) (boolType)) 'F (fun 'x (app (var 'F) (var 'x)))))
 ;; fixed-point combinator
 (test (parse/simple `((λ (f) ((λ (x) (f (x x))) (λ (x) (f (x x))))) (λ (x) x)))
       (app (fun 'f (app (fun 'x (app (var 'f) (app (var 'x) (var 'x))))
