@@ -262,15 +262,17 @@
             (let ([simple/wt (simple->simple/wt simple tenv)])
               (begin
                 (unless (equal? (simple/wt-type simple/wt) type)
-                  (error 'simple->simple/wt "type mismatch"))
+                  (error 'simple->simple/wt "type mismatch: expected ~a got ~a"
+                         type
+                         (simple/wt-type simple/wt)))
                 simple/wt)))]
     (type-case Simple simple
       [var (v) (begin
                  (unless (in-env? tenv v)
                    (error 'simple->simple/wt "~s ∉ ~s" v tenv))
                  (var/wt tenv v))]
-      [bool (b) (bool/wt b)]
-      [sif (p c a) (let ([p/wt (synth&check p (boolType))]
+      [bool (b) (bool/wt tenv b)]
+      [sif (p c a) (let ([p/wt (synth&check p tenv (boolType))] 
                          [c/wt (simple->simple/wt c tenv)]
                          [a/wt (simple->simple/wt a tenv)])
                      (unless
@@ -289,6 +291,28 @@
       [app (rator rand) (app/wt (simple->simple/wt rator tenv)
                                 (simple->simple/wt rand tenv))])))
 
+;; Simple -> Simple
+;; reproduce simple if simple is a well-typed program (i.e `() ⊢ simple : type)
+;; EFFECT: signal an error if not
+(define (typecheck-simple simple)
+  (let ([simple/wt (simple->simple/wt simple '())])
+        (begin
+          (unless (and (equal? (simple/wt-tenv simple/wt) '())
+                       (equal? (simple/wt-simple simple/wt) simple))
+            (error 'typecheck
+               "Liar Liar Pants on Fire!\n I wanted: ~a\nYou gave me: ~a.\n"
+               (format "'() ⊢ ~s : type for some type" simple)
+               (format "~a ⊢ ~a : ~a"
+                       (simple/wt-tenv simple/wt)
+                       (simple/wt-simple simple/wt)
+                       (type-string (simple/wt-type simple/wt)))))
+          (check-simple/wt simple/wt)
+          simple)))
+
+(test/exn (typecheck-simple (sif (fun (boolType) 'x (var 'x)) (bool #t) (bool #f))) "")
+(test/exn (typecheck-simple (app (bool #t) (bool #t))) "")
+        
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Interpretation
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -300,6 +324,9 @@
 
 ;; We restrict Simple to **closed** expressions so we don't need to
 ;; worry about variable capture
+
+
+;; no longer need closed-simpled?
 
 ;; Simple -> Boolean
 ;; produces true if every identifier reference in Simple is bound,
@@ -350,8 +377,7 @@
                                                               (list (funV-param ratorv))
                                                               (list randv)))]))]))]
     (begin
-      (unless (closed-simple? s)
-        (error 'interp/simple "not a valid Simple expression: ~a" s))
+      (typecheck-simple s)
       (interp/simple-env s empty-env))))
 
 ;; all my tests are now broken :)
